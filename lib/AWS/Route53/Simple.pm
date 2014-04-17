@@ -248,7 +248,7 @@ sub service {
 # - ZoneID => request parameter.
 # - ChangeID => request parameter.
 # - HealthCheckID => request parameter.
-# - Content => request body content(XML).
+# - Content => (Optional) request body content(XML).
 # - request => (Optional) an HTTP::Request instance.
 #               It is used in the request as such HTTP::Request object if specified.
 # @param content [$] request body xml string
@@ -287,6 +287,21 @@ sub send {
     }
 }
 
+## @method [public] [$] param(@params)
+# generate content XML
+# @params params [\@] parameters hashref - arrayref
+# @see _xmlRRS()
+sub param {
+    my $self = shift;
+    my $params = shift;
+    die("params type is must be ARRAYREF.") if (ref($params) ne "ARRAY");
+    $self->{"Content"} = <<"XML";
+<?xml version="1.0" encoding="UTF-8" ?>
+@{[$self->_createXML($params)]}
+XML
+    return $self;
+}
+
 
 ## @method [private] [$] _request(@params)
 # generate HTTP::Request Instance
@@ -302,6 +317,7 @@ sub _request {
 
     $params->{"method"} = ACTIONS->{$self->{"Action"}}->{"Method"};
 
+    $params->{"Content"} = (not $params->{"Content"}) ? $self->{"Content"}: $params->{"Content"};
     $self->_validateRequestParameters($params);
 
     my $path = ACTIONS->{$self->{"Action"}}->{"ActionPath"};
@@ -324,7 +340,7 @@ sub _request {
             "Signature=".$self->_createSignedParam()
         )
     );
-    $req->content($params->{"Content"}) if ($params->{"Content"});
+    $req->content($params->{"Content"});
     return $req;
 }
 
@@ -455,6 +471,71 @@ sub _setProperties {
         next if ($self->{$_});
         $self->{$_} = DEFAULTS->{uc($_)};
     }
+}
+
+## @method [private] _xmlRRS(@params)
+# @param params [\%] parameters hash reference
+# - Name [$] DNS Record Name.
+# - Type [$] DNS Record Type [A|AAAA|NS|MX|CNAME...etc]
+# - TTL [$] DNS Record ttl.
+# - Value [$|@] DNS Record Value[s].
+sub _xmlRRS {
+    my $self = shift;
+    my $params = shift;
+    my @vals;
+    if (ref($params->{"Value"}) eq "ARRAY") {
+        map({ push(@vals, "<Value>".$_."</Value>"); } @{$params->{"Value"}});
+    } else {
+        push(@vals, "<Value>".$params->{"Value"}."</Value>");
+    }
+    return <<"XML";
+<ResourceRecordSet>
+<Name>$params->{"Name"}</Name>
+<Type>$params->{"Type"}</Type>
+<TTL>$params->{"TTL"}</TTL>
+<ResourceRecords>
+<ResourceRecord>
+@{[join($/, @vals)]}
+</ResourceRecord>
+</ResourceRecords>
+</ResourceRecordSet>
+XML
+}
+
+sub _xmlChange {
+    my $self = shift;
+    my $params = shift;
+    return <<"XML";
+<Change>
+<Action>$params->{"Action"}</Action>
+@{[$self->_xmlRRS($params)]}
+</Change>
+XML
+}
+
+sub _xmlChanges {
+    my $self = shift;
+    my $params = shift;
+
+    my @ret;
+    map ({ push(@ret, $self->_xmlChange($_)); } @{$params});
+    return <<"XML";
+<ChangeBatch>
+<Changes>
+@{[join("", @ret)]}
+</Changes>
+</ChangeBatch>
+XML
+}
+
+sub _createXML {
+    my $self = shift;
+    my $params = shift;
+    return <<"XML";
+<$self->{"Action"}Request xmlns="https://$self->{'Service'}.$self->{'baseUrl'}/doc/$self->{'Version'}/">
+@{[$self->_xmlChanges($params)]}
+</$self->{"Action"}Request>
+XML
 }
 
 
